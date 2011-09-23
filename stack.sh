@@ -2,6 +2,8 @@
 
 # **stack.sh** is an opinionated openstack dev installation.
 
+#(Nati) Modified for FreeCloud Dev Env
+
 # To keep this script simple we assume you are running on an **Ubuntu 11.04
 # Natty** machine.  It should work in a VM or physical server.  Additionally we
 # put the list of *apt* and *pip* dependencies and other configuration files in
