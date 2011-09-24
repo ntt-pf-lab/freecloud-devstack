@@ -28,6 +28,8 @@ INSTALLED_APPS = (
     'django_openstack',
     'django_openstack.templatetags',
     'mailer',
+    'dash_billing.syspanel',
+    'dash_billing.dash',
 )
 
 

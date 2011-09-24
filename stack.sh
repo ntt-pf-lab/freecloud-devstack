@@ -75,8 +75,12 @@ API_DIR=$DEST/openstackx
 NOVNC_DIR=$DEST/noVNC
 MUNIN_DIR=$DEST/openstack-munin
 
+BILLING_DIR=$DEST/dash/openstack-dashboard/dash_billing
+
+export PYTHONPATH=${PYTHONPATH}:$DEST/dash/openstack-dashboard/↲
+
 # Specify which services to launch.  These generally correspond to screen tabs
-ENABLED_SERVICES=${ENABLED_SERVICES:-g-api,g-reg,key,n-api,n-cpu,n-net,n-sch,n-vnc,dash,mysql,rabbit,munin}
+ENABLED_SERVICES=${ENABLED_SERVICES:-g-api,g-reg,key,n-api,n-cpu,n-net,n-sch,n-vnc,dash,mysql,rabbit,munin,bill}
 
 # Use the first IP unless an explicit is set by ``HOST_IP`` environment variable
 if [ ! -n "$HOST_IP" ]; then
@@ -169,6 +173,9 @@ git_clone https://github.com/cloudbuilders/python-novaclient.git $NOVACLIENT_DIR
 git_clone https://github.com/cloudbuilders/openstackx.git $API_DIR
 # openstack-munin is a collection of munin plugins for monitoring the stack
 git_clone https://github.com/cloudbuilders/openstack-munin.git $MUNIN_DIR
+
+#Billing plugin
+git_clone https://nati@github.com/nati/dash_billing.git $BILLING_DIR
 
 # Initialization
 # ==============
@@ -364,6 +371,8 @@ add_nova_flag "--ec2_dmz_host=$EC2_DMZ_HOST"
 add_nova_flag "--rabbit_host=$RABBIT_HOST"
 add_nova_flag "--glance_api_servers=$GLANCE_HOSTPORT"
 add_nova_flag "--flat_network_bridge=$FLAT_NETWORK_BRIDGE"
+add_nova_flag "--notification_driver=dash_billing.billing.billing_notifier"
+
 if [ -n "$FLAT_INTERFACE" ]; then
     add_nova_flag "--flat_interface=$FLAT_INTERFACE"
 fi
@@ -465,6 +474,8 @@ screen_it n-sch "cd $NOVA_DIR && $NOVA_DIR/bin/nova-scheduler"
 # nova-vncproxy binds a privileged port, and so needs sudo
 screen_it n-vnc "cd $NOVA_DIR && sudo $NOVA_DIR/bin/nova-vncproxy"
 screen_it dash "cd $DASH_DIR && sudo /etc/init.d/apache2 restart; sudo tail -f /var/log/apache2/error.log"
+#screen_it dash "cd $DASH_DIR/openstack-dashboard && python dashboard/manage.py runserver 0.0.0.0:80"
+screen_it bill "$DASH_DIR/openstack-dashboard/dash_billing/bin/nova-notification"
 
 # Install Images
 # ==============
