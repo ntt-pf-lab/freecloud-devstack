@@ -39,6 +39,15 @@ if [ ! -d $FILES ]; then
     exit 1
 fi
 
+# you need to run this as a regular user with sudo priviledges
+if [[ $EUID -eq 0 ]]; then
+   echo "This script cannot be run as root." 1>&2
+   echo "You should run this script as the user you wish openstack to run as" 1>&2
+   echo "The user will need to be a sudoer (without password)" 1>&2
+   exit 1
+fi
+
+
 # Settings
 # ========
 
@@ -61,8 +70,13 @@ set -o errexit
 # an error.  It is also useful for following allowing as the install occurs.
 set -o xtrace
 
+# Import variables
+source ./stackrc
+
 # Destination path for installation ``DEST``
-DEST=${DEST:-/opt}
+DEST=${DEST:-/opt/stack}
+sudo mkdir -p $DEST
+sudo chown `whoami` $DEST
 
 # Set the destination directories for openstack projects
 NOVA_DIR=$DEST/nova
@@ -71,7 +85,7 @@ NIXON_DIR=$DEST/dash/openstack-dashboard/dashboard/nixon
 GLANCE_DIR=$DEST/glance
 KEYSTONE_DIR=$DEST/keystone
 NOVACLIENT_DIR=$DEST/python-novaclient
-API_DIR=$DEST/openstackx
+OPENSTACKX_DIR=$DEST/openstackx
 NOVNC_DIR=$DEST/noVNC
 MUNIN_DIR=$DEST/openstack-munin
 
@@ -89,17 +103,19 @@ fi
 
 # Nova network configuration
 PUBLIC_INTERFACE=${PUBLIC_INTERFACE:-eth0}
-VLAN_INTERFACE=${PUBLIC_INTERFACE:-$PUBLIC_INTERFACE}
-FLOATING_RANGE=${FLOATING_RANGE:-10.6.0.0/27}
+VLAN_INTERFACE=${VLAN_INTERFACE:-$PUBLIC_INTERFACE}
+FLOATING_RANGE=${FLOATING_RANGE:-172.24.4.1/28}
 FIXED_RANGE=${FIXED_RANGE:-10.0.0.0/24}
-NET_MAN=${NET_MAN:-VlanManager}
+FIXED_NETWORK_SIZE=${FIXED_NETWORK_SIZE:-256}
+NET_MAN=${NET_MAN:-FlatDHCPManager}
 EC2_DMZ_HOST=${EC2_DMZ_HOST:-$HOST_IP}
 FLAT_NETWORK_BRIDGE=${FLAT_NETWORK_BRIDGE:-br100}
+SCHEDULER=${SCHEDULER:-nova.scheduler.simple.SimpleScheduler}
 
 # If you are using FlatDHCP on multiple hosts, set the ``FLAT_INTERFACE``
 # variable but make sure that the interface doesn't already have an
 # ip or you risk breaking things.
-# FLAT_INTERFACE=eth0
+FLAT_INTERFACE=${FLAT_INTERFACE:-eth0}
 
 # Nova hypervisor configuration.  We default to **kvm** but will drop back to
 # **qemu** if we are unable to load the kvm module.
@@ -145,34 +161,31 @@ function git_clone {
         sudo mkdir $2
         sudo chown `whoami` $2
         git clone $1 $2
+        cd $2
+        # This checkout syntax works for both branches and tags
+        git checkout $3
     fi
 }
 
 # compute service
-# FIXME - need to factor out these repositories
-# git_clone https://github.com/cloudbuilders/nova.git $NOVA_DIR
-if [ ! -d $NOVA_DIR ]; then
-    bzr clone lp:~hudson-openstack/nova/milestone-proposed/ $NOVA_DIR
-fi
+git_clone $NOVA_REPO $NOVA_DIR $NOVA_BRANCH
 # image catalog service
-git_clone https://github.com/cloudbuilders/glance.git $GLANCE_DIR
+git_clone $GLANCE_REPO $GLANCE_DIR $GLANCE_BRANCH
 # unified auth system (manages accounts/tokens)
-git_clone https://github.com/cloudbuilders/keystone.git $KEYSTONE_DIR
+git_clone $KEYSTONE_REPO $KEYSTONE_DIR $KEYSTONE_BRANCH
 # a websockets/html5 or flash powered VNC console for vm instances
-git_clone https://github.com/cloudbuilders/noVNC.git $NOVNC_DIR
+git_clone $NOVNC_REPO $NOVNC_DIR $NOVNC_BRANCH
 # django powered web control panel for openstack
-git_clone https://github.com/cloudbuilders/openstack-dashboard.git $DASH_DIR
-# FIXME - need to factor out logic like this
-cd $DASH_DIR && sudo git fetch && sudo git checkout origin/keystone_diablo
+git_clone $DASH_REPO $DASH_DIR $DASH_BRANCH $DASH_TAG
 # add nixon, will use this to show munin graphs in dashboard
-git_clone https://github.com/cloudbuilders/nixon.git $NIXON_DIR
+git_clone $NIXON_REPO $NIXON_DIR $NIXON_BRANCH
 # python client library to nova that dashboard (and others) use
-git_clone https://github.com/cloudbuilders/python-novaclient.git $NOVACLIENT_DIR
+git_clone $NOVACLIENT_REPO $NOVACLIENT_DIR $NOVACLIENT_BRANCH
 # openstackx is a collection of extensions to openstack.compute & nova
 # that is *deprecated*.  The code is being moved into python-novaclient & nova.
-git_clone https://github.com/cloudbuilders/openstackx.git $API_DIR
+git_clone $OPENSTACKX_REPO $OPENSTACKX_DIR $OPENSTACKX_BRANCH
 # openstack-munin is a collection of munin plugins for monitoring the stack
-git_clone https://github.com/cloudbuilders/openstack-munin.git $MUNIN_DIR
+git_clone $MUNIN_REPO $MUNIN_DIR $MUNIN_BRANCH
 
 #Billing plugin
 git_clone https://nati@github.com/nati/dash_billing.git $BILLING_DIR
@@ -187,7 +200,7 @@ cd $NOVA_DIR; sudo python setup.py develop
 cd $NOVACLIENT_DIR; sudo python setup.py develop
 cd $KEYSTONE_DIR; sudo python setup.py develop
 cd $GLANCE_DIR; sudo python setup.py develop
-cd $API_DIR; sudo python setup.py develop
+cd $OPENSTACKX_DIR; sudo python setup.py develop
 cd $DASH_DIR/django-openstack; sudo python setup.py develop
 cd $DASH_DIR/openstack-dashboard; sudo python setup.py develop
 
@@ -246,12 +259,8 @@ if [[ "$ENABLED_SERVICES" =~ "dash" ]]; then
 
     ## Configure apache's 000-default to run dashboard
     sudo cp $FILES/000-default.template /etc/apache2/sites-enabled/000-default
+    sudo sed -e "s,%USER%,$USER,g" -i /etc/apache2/sites-enabled/000-default
     sudo sed -e "s,%DASH_DIR%,$DASH_DIR,g" -i /etc/apache2/sites-enabled/000-default
-
-    # ``python setup.py develop`` left some files owned by root in ``DASH_DIR``
-    # and others are owned by the user you are using to run this script.
-    # We need to change the owner to apache for dashboard to run.
-    sudo chown -R www-data:www-data $DASH_DIR
 fi
 
 
@@ -355,6 +364,7 @@ function add_nova_flag {
 rm -f $NOVA_DIR/bin/nova.conf
 add_nova_flag "--verbose"
 add_nova_flag "--nodaemon"
+add_nova_flag "--scheduler_driver=$SCHEDULER"
 add_nova_flag "--dhcpbridge_flagfile=$NOVA_DIR/bin/nova.conf"
 add_nova_flag "--network_manager=nova.network.manager.$NET_MAN"
 add_nova_flag "--my_ip=$HOST_IP"
@@ -362,7 +372,7 @@ add_nova_flag "--public_interface=$PUBLIC_INTERFACE"
 add_nova_flag "--vlan_interface=$VLAN_INTERFACE"
 add_nova_flag "--sql_connection=$BASE_SQL_CONN/nova"
 add_nova_flag "--libvirt_type=$LIBVIRT_TYPE"
-add_nova_flag "--osapi_extensions_path=$API_DIR/extensions"
+add_nova_flag "--osapi_extensions_path=$OPENSTACKX_DIR/extensions"
 add_nova_flag "--vncproxy_url=http://$HOST_IP:6080"
 add_nova_flag "--vncproxy_wwwroot=$NOVNC_DIR/"
 add_nova_flag "--api_paste_config=$KEYSTONE_DIR/examples/paste/nova-api-paste.ini"
@@ -387,7 +397,7 @@ if [[ "$ENABLED_SERVICES" =~ "mysql" ]]; then
     $NOVA_DIR/bin/nova-manage db sync
 
     # create a small network
-    $NOVA_DIR/bin/nova-manage network create private $FIXED_RANGE 1 32
+    $NOVA_DIR/bin/nova-manage network create private $FIXED_RANGE 1 $FIXED_NETWORK_SIZE 
 
     # create some floating ips
     $NOVA_DIR/bin/nova-manage floating create $FLOATING_RANGE
@@ -406,6 +416,7 @@ if [[ "$ENABLED_SERVICES" =~ "key" ]]; then
     KEYSTONE_CONF=$KEYSTONE_DIR/etc/keystone.conf
     cp $FILES/keystone.conf $KEYSTONE_CONF
     sudo sed -e "s,%SQL_CONN%,$BASE_SQL_CONN/keystone,g" -i $KEYSTONE_CONF
+    sudo sed -e "s,%DEST%,$DEST,g" -i $KEYSTONE_CONF
 
     KEYSTONE_DATA=$KEYSTONE_DIR/bin/keystone_data.sh
     cp $FILES/keystone_data.sh $KEYSTONE_DATA
@@ -471,8 +482,7 @@ fi
 screen_it n-cpu "cd $NOVA_DIR && echo $NOVA_DIR/bin/nova-compute | newgrp libvirtd"
 screen_it n-net "cd $NOVA_DIR && $NOVA_DIR/bin/nova-network"
 screen_it n-sch "cd $NOVA_DIR && $NOVA_DIR/bin/nova-scheduler"
-# nova-vncproxy binds a privileged port, and so needs sudo
-screen_it n-vnc "cd $NOVA_DIR && sudo $NOVA_DIR/bin/nova-vncproxy"
+screen_it n-vnc "cd $NOVNC_DIR && ./utils/nova-wsproxy.py 6080 --web ."
 screen_it dash "cd $DASH_DIR && sudo /etc/init.d/apache2 restart; sudo tail -f /var/log/apache2/error.log"
 #screen_it dash "cd $DASH_DIR/openstack-dashboard && python dashboard/manage.py runserver 0.0.0.0:80"
 screen_it bill "$DASH_DIR/openstack-dashboard/dash_billing/bin/nova-notification"

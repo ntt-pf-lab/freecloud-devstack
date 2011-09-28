@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# Source params
+source ./stackrc
+
+# Store cwd
+CWD=`pwd`
+
 # Configurable params
 BRIDGE=${BRIDGE:-br0}
 CONTAINER=${CONTAINER:-STACK}
@@ -9,9 +15,13 @@ CONTAINER_NETMASK=${CONTAINER_NETMASK:-255.255.255.0}
 CONTAINER_GATEWAY=${CONTAINER_GATEWAY:-192.168.1.1}
 NAMESERVER=${NAMESERVER:-$CONTAINER_GATEWAY}
 COPYENV=${COPYENV:-1}
+DEST=${DEST:-/opt/stack}
 
 # Param string to pass to stack.sh.  Like "EC2_DMZ_HOST=192.168.1.1 MYSQL_USER=nova"
 STACKSH_PARAMS=${STACKSH_PARAMS:-}
+
+# Option to use the version of devstack on which we are currently working
+USE_CURRENT_DEVSTACK=${USE_CURRENT_DEVSTACK:-1}
 
 # Warn users who aren't on natty
 if ! grep -q natty /etc/lsb-release; then
@@ -23,8 +33,8 @@ apt-get install -y lxc debootstrap
 
 # Install cgroup-bin from source, since the packaging is buggy and possibly incompatible with our setup
 if ! which cgdelete | grep -q cgdelete; then
-    apt-get install -y g++ bison flex libpam0g-dev
-    wget http://sourceforge.net/projects/libcg/files/libcgroup/v0.37.1/libcgroup-0.37.1.tar.bz2/download -O /tmp/libcgroup-0.37.1.tar.bz2 
+    apt-get install -y g++ bison flex libpam0g-dev make
+    wget http://sourceforge.net/projects/libcg/files/libcgroup/v0.37.1/libcgroup-0.37.1.tar.bz2/download -O /tmp/libcgroup-0.37.1.tar.bz2
     cd /tmp && bunzip2 libcgroup-0.37.1.tar.bz2  && tar xfv libcgroup-0.37.1.tar
     cd libcgroup-0.37.1
     ./configure
@@ -51,27 +61,62 @@ if [ -d /cgroup/$CONTAINER ]; then
     cgdelete -r cpu,net_cls:$CONTAINER
 fi
 
+# git clone only if directory doesn't exist already.  Since ``DEST`` might not
+# be owned by the installation user, we create the directory and change the
+# ownership to the proper user.
+function git_clone {
+    if [ ! -d $2 ]; then
+        sudo mkdir $2
+        sudo chown `whoami` $2
+        git clone $1 $2
+        cd $2
+        # This checkout syntax works for both branches and tags
+        git checkout $3
+    fi
+}
+
+# Location of the base image directory
+CACHEDIR=/var/cache/lxc/natty/rootfs-amd64
+
+# Provide option to do totally clean install
+if [ "$CLEAR_LXC_CACHE" = "1" ]; then
+    rm -rf $CACHEDIR
+fi
 
 # Warm the base image on first install
-CACHEDIR=/var/cache/lxc/natty/rootfs-amd64
-if [ ! -d $CACHEDIR ]; then
+if [ ! -f $CACHEDIR/bootstrapped ]; then
     # by deleting the container, we force lxc-create to re-bootstrap (lxc is
     # lazy and doesn't do anything if a container already exists)
     lxc-destroy -n $CONTAINER
     # trigger the initial debootstrap
     lxc-create -n $CONTAINER -t natty -f $LXC_CONF
     chroot $CACHEDIR apt-get update
-    chroot $CACHEDIR apt-get install -y --force-yes `cat files/apts/* | cut -d\# -f1 | egrep -v "(rabbitmq|libvirt-bin|mysql-server)"`
+    chroot $CACHEDIR apt-get install -y --force-yes `cat files/apts/* | cut -d\# -f1 | egrep -v "(rabbitmq|libvirt-bin|mysql-server|munin-node)"`
     chroot $CACHEDIR pip install `cat files/pips/*`
-    # FIXME (anthony) - provide ability to vary source locations
-    #git clone https://github.com/cloudbuilders/nova.git $CACHEDIR/opt/nova
-    bzr clone lp:~hudson-openstack/nova/milestone-proposed/ $CACHEDIR/opt/nova
-    git clone https://github.com/cloudbuilders/openstackx.git $CACHEDIR/opt/openstackx
-    git clone https://github.com/cloudbuilders/noVNC.git $CACHEDIR/opt/noVNC
-    git clone https://github.com/cloudbuilders/openstack-dashboard.git $CACHEDIR/opt/dash
-    git clone https://github.com/cloudbuilders/python-novaclient.git $CACHEDIR/opt/python-novaclient
-    git clone https://github.com/cloudbuilders/keystone.git $CACHEDIR/opt/keystone
-    git clone https://github.com/cloudbuilders/glance.git $CACHEDIR/opt/glance
+    touch $CACHEDIR/bootstrapped
+fi
+
+# Clean out code repos if directed to do so
+if [ "$CLEAN" = "1" ]; then
+    rm -rf $CACHEDIR/$DEST
+fi
+
+# Cache openstack code
+mkdir -p $CACHEDIR/$DEST
+git_clone $NOVA_REPO $CACHEDIR/$DEST/nova $NOVA_BRANCH
+git_clone $GLANCE_REPO $CACHEDIR/$DEST/glance $GLANCE_BRANCH
+git_clone $KEYSTONE_REPO $CACHEDIR/$DESTkeystone $KEYSTONE_BRANCH
+git_clone $NOVNC_REPO $CACHEDIR/$DEST/novnc $NOVNC_BRANCH
+git_clone $DASH_REPO $CACHEDIR/$DEST/dash $DASH_BRANCH $DASH_TAG
+git_clone $NIXON_REPO $CACHEDIR/$DEST/nixon $NIXON_BRANCH
+git_clone $NOVACLIENT_REPO $CACHEDIR/$DEST/python-novaclient $NOVACLIENT_BRANCH
+git_clone $OPENSTACKX_REPO $CACHEDIR/$DEST/openstackx $OPENSTACKX_BRANCH
+git_clone $MUNIN_REPO $CACHEDIR/$DEST/openstack-munin $MUNIN_BRANCH
+
+# Use this version of devstack?
+if [ "$USE_CURRENT_DEVSTACK" = "1" ]; then
+    rm -rf $CACHEDIR/$DEST/devstack
+    cp -pr $CWD $CACHEDIR/$DEST/devstack
 fi
 
 # Destroy the old container
@@ -88,15 +133,15 @@ lxc-create -n $CONTAINER -t natty -f $LXC_CONF
 # Specify where our container rootfs lives
 ROOTFS=/var/lib/lxc/$CONTAINER/rootfs/
 
-# Create a stack user that is a member of the libvirtd group so that stack 
+# Create a stack user that is a member of the libvirtd group so that stack
 # is able to interact with libvirt.
 chroot $ROOTFS groupadd libvirtd
-chroot $ROOTFS useradd stack -s /bin/bash -d /opt -G libvirtd
+chroot $ROOTFS useradd stack -s /bin/bash -d $DEST -G libvirtd
 
 # a simple password - pass
 echo stack:pass | chroot $ROOTFS chpasswd
 
-# and has sudo ability (in the future this should be limited to only what 
+# and has sudo ability (in the future this should be limited to only what
 # stack requires)
 echo "stack ALL=(ALL) NOPASSWD: ALL" >> $ROOTFS/etc/sudoers
 
@@ -108,25 +153,25 @@ cp -pR /lib/modules/`uname -r`/kernel/net $ROOTFS/lib/modules/`uname -r`/kernel/
 # Gracefully cp only if source file/dir exists
 function cp_it {
     if [ -e $1 ] || [ -d $1 ]; then
-        cp -pr $1 $2
+        cp -pRL $1 $2
     fi
 }
 
 # Copy over your ssh keys and env if desired
 if [ "$COPYENV" = "1" ]; then
-    cp_it ~/.ssh $ROOTFS/opt/.ssh
-    cp_it ~/.ssh/id_rsa.pub $ROOTFS/opt/.ssh/authorized_keys
-    cp_it ~/.gitconfig $ROOTFS/opt/.gitconfig
-    cp_it ~/.vimrc $ROOTFS/opt/.vimrc
-    cp_it ~/.bashrc $ROOTFS/opt/.bashrc
+    cp_it ~/.ssh $ROOTFS/$DEST/.ssh
+    cp_it ~/.ssh/id_rsa.pub $ROOTFS/$DEST/.ssh/authorized_keys
+    cp_it ~/.gitconfig $ROOTFS/$DEST/.gitconfig
+    cp_it ~/.vimrc $ROOTFS/$DEST/.vimrc
+    cp_it ~/.bashrc $ROOTFS/$DEST/.bashrc
 fi
 
 # Make our ip address hostnames look nice at the command prompt
-echo "export PS1='${debian_chroot:+($debian_chroot)}\\u@\\H:\\w\\$ '" >> $ROOTFS/opt/.bashrc
+echo "export PS1='${debian_chroot:+($debian_chroot)}\\u@\\H:\\w\\$ '" >> $ROOTFS/$DEST/.bashrc
 echo "export PS1='${debian_chroot:+($debian_chroot)}\\u@\\H:\\w\\$ '" >> $ROOTFS/etc/profile
 
-# Give stack ownership over /opt so it may do the work needed
-chroot $ROOTFS chown -R stack /opt
+# Give stack ownership over $DEST so it may do the work needed
+chroot $ROOTFS chown -R stack $DEST
 
 # Configure instance network
 INTERFACES=$ROOTFS/etc/network/interfaces
@@ -142,7 +187,7 @@ iface eth0 inet static
 EOF
 
 # Configure the runner
-RUN_SH=$ROOTFS/opt/run.sh
+RUN_SH=$ROOTFS/$DEST/run.sh
 cat > $RUN_SH <<EOF
 #!/usr/bin/env bash
 # Make sure dns is set up
@@ -155,10 +200,10 @@ killall screen
 # Install and run stack.sh
 sudo apt-get update
 sudo apt-get -y --force-yes install git-core vim-nox sudo
-if [ ! -d "/opt/devstack" ]; then
-    git clone git://github.com/cloudbuilders/devstack.git /opt/devstack
+if [ ! -d "$DEST/devstack" ]; then
+    git clone git://github.com/cloudbuilders/devstack.git $DEST/devstack
 fi
-cd /opt/devstack && $STACKSH_PARAMS ./stack.sh > /opt/run.sh.log
+cd $DEST/devstack && $STACKSH_PARAMS ./stack.sh > /$DEST/run.sh.log
 EOF
 
 # Make the run.sh executable
@@ -168,7 +213,7 @@ chmod 755 $RUN_SH
 RC_LOCAL=$ROOTFS/etc/rc.local
 cat > $RC_LOCAL <<EOF
 #!/bin/sh -e
-su -c "/opt/run.sh" stack
+su -c "$DEST/run.sh" stack
 EOF
 
 # Configure cgroup directory
