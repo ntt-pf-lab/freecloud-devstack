@@ -25,9 +25,10 @@ if ! grep -q natty /etc/lsb-release; then
     fi
 fi
 
+
 #The following makes fresh mininmal installs (i.e. LXCs) happy
-apt-get update
-apt-get install -y sudo
+#apt-get update
+#apt-get install -y sudo
 
 # stack.sh keeps the list of **apt** and **pip** dependencies in external
 # files, along with config templates and other useful files.  You can find these
@@ -46,7 +47,6 @@ if [[ $EUID -eq 0 ]]; then
    echo "The user will need to be a sudoer (without password)" 1>&2
    exit 1
 fi
-
 
 # Settings
 # ========
@@ -73,10 +73,12 @@ set -o xtrace
 # Import variables
 source ./stackrc
 
+WHOAMI="nova.nova"
+
 # Destination path for installation ``DEST``
 DEST=${DEST:-/opt/stack}
 sudo mkdir -p $DEST
-sudo chown `whoami` $DEST
+sudo chown $WHOAMI $DEST
 
 # Set the destination directories for openstack projects
 NOVA_DIR=$DEST/nova
@@ -91,7 +93,7 @@ MUNIN_DIR=$DEST/openstack-munin
 
 BILLING_DIR=$DEST/dash/openstack-dashboard/dash_billing
 
-export PYTHONPATH=${PYTHONPATH}:$DEST/dash/openstack-dashboard/↲
+export PYTHONPATH=${PYTHONPATH}:$DASH_DIR/openstack-dashboard/↲
 
 # Specify which services to launch.  These generally correspond to screen tabs
 ENABLED_SERVICES=${ENABLED_SERVICES:-g-api,g-reg,key,n-api,n-cpu,n-net,n-sch,n-vnc,dash,mysql,rabbit,munin,bill}
@@ -148,10 +150,10 @@ mysql-server-5.1 mysql-server/start_on_boot boolean true
 MYSQL_PRESEED
 
 # install apt requirements
-sudo apt-get install -y -q `cat $FILES/apts/* | cut -d\# -f1 | grep -Ev "mysql-server|rabbitmq-server"`
+#sudo apt-get install -y -q `cat $FILES/apts/* | cut -d\# -f1 | grep -Ev "mysql-server|rabbitmq-server"`
 
 # install python requirements
-sudo PIP_DOWNLOAD_CACHE=/var/cache/pip pip install `cat $FILES/pips/*`
+#sudo PIP_DOWNLOAD_CACHE=/var/cache/pip pip install `cat $FILES/pips/*`
 
 # git clone only if directory doesn't exist already.  Since ``DEST`` might not
 # be owned by the installation user, we create the directory and change the
@@ -159,37 +161,39 @@ sudo PIP_DOWNLOAD_CACHE=/var/cache/pip pip install `cat $FILES/pips/*`
 function git_clone {
     if [ ! -d $2 ]; then
         sudo mkdir $2
-        sudo chown `whoami` $2
+        sudo chown $WHOAMI $2
         git clone $1 $2
         cd $2
         # This checkout syntax works for both branches and tags
         git checkout $3
     fi
 }
+UPDATE=FALSE 
+if [ $UPDATE ]; then
+    # compute service
+    git_clone $NOVA_REPO $NOVA_DIR $NOVA_BRANCH
+    # image catalog service
+    git_clone $GLANCE_REPO $GLANCE_DIR $GLANCE_BRANCH
+    # unified auth system (manages accounts/tokens)
+    git_clone $KEYSTONE_REPO $KEYSTONE_DIR $KEYSTONE_BRANCH
+    # a websockets/html5 or flash powered VNC console for vm instances
+    git_clone $NOVNC_REPO $NOVNC_DIR $NOVNC_BRANCH
+    # django powered web control panel for openstack
+    git_clone $DASH_REPO $DASH_DIR $DASH_BRANCH $DASH_TAG
+    # add nixon, will use this to show munin graphs in dashboard
+    git_clone $NIXON_REPO $NIXON_DIR $NIXON_BRANCH
+    # python client library to nova that dashboard (and others) use
+    git_clone $NOVACLIENT_REPO $NOVACLIENT_DIR $NOVACLIENT_BRANCH
+    # openstackx is a collection of extensions to openstack.compute & nova
+    # that is *deprecated*.  The code is being moved into python-novaclient & nova.
+    git_clone $OPENSTACKX_REPO $OPENSTACKX_DIR $OPENSTACKX_BRANCH
+    # openstack-munin is a collection of munin plugins for monitoring the stack
+    git_clone $MUNIN_REPO $MUNIN_DIR $MUNIN_BRANCH
 
-# compute service
-git_clone $NOVA_REPO $NOVA_DIR $NOVA_BRANCH
-# image catalog service
-git_clone $GLANCE_REPO $GLANCE_DIR $GLANCE_BRANCH
-# unified auth system (manages accounts/tokens)
-git_clone $KEYSTONE_REPO $KEYSTONE_DIR $KEYSTONE_BRANCH
-# a websockets/html5 or flash powered VNC console for vm instances
-git_clone $NOVNC_REPO $NOVNC_DIR $NOVNC_BRANCH
-# django powered web control panel for openstack
-git_clone $DASH_REPO $DASH_DIR $DASH_BRANCH $DASH_TAG
-# add nixon, will use this to show munin graphs in dashboard
-git_clone $NIXON_REPO $NIXON_DIR $NIXON_BRANCH
-# python client library to nova that dashboard (and others) use
-git_clone $NOVACLIENT_REPO $NOVACLIENT_DIR $NOVACLIENT_BRANCH
-# openstackx is a collection of extensions to openstack.compute & nova
-# that is *deprecated*.  The code is being moved into python-novaclient & nova.
-git_clone $OPENSTACKX_REPO $OPENSTACKX_DIR $OPENSTACKX_BRANCH
-# openstack-munin is a collection of munin plugins for monitoring the stack
-git_clone $MUNIN_REPO $MUNIN_DIR $MUNIN_BRANCH
+    #Billing plugin
+    git_clone $BILLING_REPO $BILLING_DIR $BILLING_BRANCH
 
-#Billing plugin
-git_clone https://nati@github.com/nati/dash_billing.git $BILLING_DIR
-
+fi
 # Initialization
 # ==============
 
@@ -209,7 +213,6 @@ cd $DASH_DIR/openstack-dashboard; sudo python setup.py develop
 cp $FILES/screenrc ~/.screenrc
 
 ## TODO: update current user to allow sudo for all commands in files/sudo/*
-
 # Rabbit
 # ---------
 #
