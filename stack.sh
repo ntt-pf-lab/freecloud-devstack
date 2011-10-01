@@ -15,6 +15,9 @@
 # Sanity Check
 # ============
 
+# Start our timer
+START_TIME=`python -c "import time; print time.time()"`
+
 # Warn users who aren't on natty, but allow them to override check and attempt
 # installation with ``FORCE=yes ./stack``
 if ! grep -q natty /etc/lsb-release; then
@@ -58,6 +61,11 @@ fi
 #     ./stack.sh
 #
 # You can also pass options on a single line ``MYSQL_PASS=simple ./stack.sh``
+#
+# Additionally, you can put any local variables into a ``localrc`` file, like::
+#
+#     MYSQL_PASS=anothersecret
+#     MYSQL_USER=hellaroot
 #
 # We try to have sensible defaults, so you should be able to run ``./stack.sh``
 # in most cases.
@@ -150,10 +158,10 @@ mysql-server-5.1 mysql-server/start_on_boot boolean true
 MYSQL_PRESEED
 
 # install apt requirements
-#sudo apt-get install -y -q `cat $FILES/apts/* | cut -d\# -f1 | grep -Ev "mysql-server|rabbitmq-server"`
+sudo apt-get install -y -q `cat $FILES/apts/* | cut -d\# -f1 | grep -Ev "mysql-server|rabbitmq-server"`
 
 # install python requirements
-#sudo PIP_DOWNLOAD_CACHE=/var/cache/pip pip install `cat $FILES/pips/*`
+sudo PIP_DOWNLOAD_CACHE=/var/cache/pip pip install `cat $FILES/pips/*`
 
 # git clone only if directory doesn't exist already.  Since ``DEST`` might not
 # be owned by the installation user, we create the directory and change the
@@ -382,6 +390,9 @@ add_nova_flag "--rabbit_host=$RABBIT_HOST"
 add_nova_flag "--glance_api_servers=$GLANCE_HOSTPORT"
 add_nova_flag "--flat_network_bridge=$FLAT_NETWORK_BRIDGE"
 add_nova_flag "--notification_driver=dash_billing.billing.billing_notifier"
+add_nova_flag "--monkey_patch=true"
+add_nova_flag "--monkey_patch_modules=nova.compute.api:nova.notifier.api.notify_decorator,nova.network.api:nova.notifier.api.notify_decorator,nova.scheduler.api:nova.notifier.api.notify_decorator"
+add_nova_flag "--publish_errors"
 
 if [ -n "$FLAT_INTERFACE" ]; then
     add_nova_flag "--flat_interface=$FLAT_INTERFACE"
@@ -397,7 +408,7 @@ if [[ "$ENABLED_SERVICES" =~ "mysql" ]]; then
     $NOVA_DIR/bin/nova-manage db sync
 
     # create a small network
-    $NOVA_DIR/bin/nova-manage network create private $FIXED_RANGE 1 $FIXED_NETWORK_SIZE 
+    $NOVA_DIR/bin/nova-manage network create private $FIXED_RANGE 1 $FIXED_NETWORK_SIZE
 
     # create some floating ips
     $NOVA_DIR/bin/nova-manage floating create $FLOATING_RANGE
@@ -522,3 +533,11 @@ if [[ "$ENABLED_SERVICES" =~ "key" ]]; then
     echo "keystone is serving at http://$HOST_IP:5000/v2.0/"
     echo "examples on using novaclient command line is in exercise.sh"
 fi
+
+# Summary
+# =======
+
+# End our timer and give a timing summary
+END_TIME=`python -c "import time; print time.time()"`
+ELAPSED=`python -c "print $END_TIME - $START_TIME"`
+echo "stack.sh completed in $ELAPSED seconds."

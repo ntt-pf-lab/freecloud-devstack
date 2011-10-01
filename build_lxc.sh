@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 
+# Sanity check
+if [ "$EUID" -ne "0" ]; then
+  echo "This script must be run with root privileges."
+  exit 1
+fi
+
+# Warn users who aren't on natty
+if ! grep -q natty /etc/lsb-release; then
+    echo "WARNING: this script has only been tested on natty"
+fi
+
 # Source params
 source ./stackrc
 
@@ -23,10 +34,6 @@ STACKSH_PARAMS=${STACKSH_PARAMS:-}
 # Option to use the version of devstack on which we are currently working
 USE_CURRENT_DEVSTACK=${USE_CURRENT_DEVSTACK:-1}
 
-# Warn users who aren't on natty
-if ! grep -q natty /etc/lsb-release; then
-    echo "WARNING: this script has only been tested on natty"
-fi
 
 # Install deps
 apt-get install -y lxc debootstrap
@@ -204,6 +211,9 @@ if [ ! -d "$DEST/devstack" ]; then
     git clone git://github.com/cloudbuilders/devstack.git $DEST/devstack
 fi
 cd $DEST/devstack && $STACKSH_PARAMS ./stack.sh > /$DEST/run.sh.log
+echo >> /$DEST/run.sh.log
+echo >> /$DEST/run.sh.log
+echo "All done! Time to start clicking." >> /$DEST/run.sh.log
 EOF
 
 # Make the run.sh executable
@@ -224,3 +234,20 @@ fi
 
 # Start our container
 lxc-start -d -n $CONTAINER
+
+# Done creating the container, let's tail the log
+echo
+echo "============================================================="
+echo "                          -- YAY! --"
+echo "============================================================="
+echo
+echo "We're done creating the container, about to start tailing the"
+echo "stack.sh log. It will take a second or two to start."
+echo
+echo "Just CTRL-C at any time to stop tailing."
+
+while [ ! -e "$ROOTFS/$DEST/run.sh.log" ]; do
+  sleep 1
+done
+
+tail -F $ROOTFS/$DEST/run.sh.log
