@@ -260,6 +260,9 @@ if [[ "$ENABLED_SERVICES" =~ "dash" ]]; then
     # Includes settings for Nixon, to expose munin charts.
     sudo cp $FILES/dash_settings.py local/local_settings.py
 
+    mysql -u$MYSQL_USER -p$MYSQL_PASS -e 'DROP DATABASE IF EXISTS dash;'
+    mysql -u$MYSQL_USER -p$MYSQL_PASS -e 'CREATE DATABASE dash;'
+
     dashboard/manage.py syncdb
 
     # create an empty directory that apache uses as docroot
@@ -391,7 +394,7 @@ add_nova_flag "--glance_api_servers=$GLANCE_HOSTPORT"
 add_nova_flag "--flat_network_bridge=$FLAT_NETWORK_BRIDGE"
 add_nova_flag "--notification_driver=dash_billing.billing.billing_notifier"
 add_nova_flag "--monkey_patch=true"
-add_nova_flag "--monkey_patch_modules=nova.compute.api:nova.notifier.api.notify_decorator,nova.network.api:nova.notifier.api.notify_decorator,nova.scheduler.api:nova.notifier.api.notify_decorator"
+add_nova_flag "--monkey_patch_modules=nova.compute.manager:dash_billing.billing.billing_notifier.api_decorator,nova.compute.api:dash_billing.billing.billing_notifier.api_decorator,nova.network.api:dash_billing.billing.billing_notifier.api_decorator,nova.scheduler.api:dash_billing.billing.billing_notifier.api_decorator"
 add_nova_flag "--publish_errors"
 
 if [ -n "$FLAT_INTERFACE" ]; then

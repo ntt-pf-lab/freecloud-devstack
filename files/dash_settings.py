@@ -10,9 +10,11 @@ LOCAL_PATH = os.path.dirname(os.path.abspath(__file__))
 # FIXME: We need to change this to mysql, instead of sqlite.
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(LOCAL_PATH, 'dashboard_openstack.sqlite3'),
-    },
+        'NAME': 'dash',
+        'ENGINE': 'django.db.backends.mysql',
+	'USER':'root',
+	'PASSWORD':'nova'
+     },
 }
 
 CACHE_BACKEND = 'dummy://'
